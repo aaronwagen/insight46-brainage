@@ -1,0 +1,1543 @@
+---
+title: "Applying the brain age algorithm to the Insight 46 cohort study"
+author: "Aaron Wagen"
+date: "6/04/2020"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+
+# 1 Setup
+
+#### Libraries
+```{r libraries and wd, message=F}
+library(ggExtra)
+library(kableExtra)
+library(psych)
+library(qwraps2)
+library(stats)
+library(tidyverse)
+library(ggpubr)
+library(broom)
+library(skimr)
+library(jtools)
+require(ggforce)
+```
+
+
+
+#### Set options and theme
+```{r setup, include = F}
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE)
+setwd("~/OneDrive - University College London/Brain Age/")
+
+theme_set(theme_bw()) #Set theme
+```
+
+#### Import data
+```{r, include= T, results='hide'}
+mydata <- read.csv("brainagedatacleaned20200819.csv")
+```
+
+
+### Organise data
+
+#### Relevel factors
+```{r}
+mydata$SocioStatus <- factor(mydata$SocioStatus, levels = c("Manual", "Non-manual"))
+mydata$Smoking <- factor(mydata$Smoking, levels = c("Never smoked", "Ex-smoker", "Current smoker"))
+mydata$ApoE4 <- factor(mydata$ApoE4, levels = c("Non-carrier", "Carrier"))
+mydata$Education <- factor(mydata$Education, levels = c("None attempted", "Vocational or GCSE", "A-level or higher"))
+mydata$Diagnosis <- factor(mydata$Diagnosis)
+```
+
+#### Recode the snp as a factor
+```{r}
+mydata$rs1452628_T <- as.factor(mydata$rs1452628_T)
+```
+
+#### Create dataset of all cases
+```{r}
+mydata <- mydata %>% 
+  dplyr::select(-id)
+allcases <- mydata  %>%           #Create dataset of all cases regardless of missing data-points, select variables
+  dplyr::select(-Diagnosis, -Age_at_blood, -ScanAge)
+
+```
+
+
+# 2 Missing data
+
+\
+
+#### Create the dataset of the sample used in the study (mydata5)
+
+```{r}
+dim(mydata)   #Remove 34 participants with missing brain predicted age values
+mydata2 <- mydata %>% 
+  drop_na(BPA)
+dim(mydata2)
+```
+
+```{r}
+mydata3 <- mydata2 %>%   #Remove 8 participants with missing amyloid status
+  drop_na(AmyloidStatus)
+dim(mydata3)
+```
+
+```{r}
+mydata4 <- mydata3 %>%    #Remove 2 participants with missing ApoE4 status
+  drop_na(ApoE4)
+dim(mydata4)
+```
+
+```{r}
+mydata5 <- mydata4 %>%    #Remove 2 participants with missing Serum NFL status
+  drop_na(SerumNFL)
+
+dim(mydata5)
+```
+
+
+```{r}
+mydata5 %>%     #Check missingness in the core sample used in the study.
+  summarise_all(funs(sum(is.na(.)))) %>% 
+  pivot_longer(everything(), names_to="Variable", values_to="NA Count") %>% 
+  kable()
+
+```
+
+#### Create dataset of participants with complete data in all variables.
+```{r, include=F}
+allcases$Complete <- allcases %>% 
+  complete.cases() %>% 
+  as.factor() %>% 
+  fct_recode("Complete" = "TRUE", "Incomplete" = "FALSE")
+completedata <- allcases[complete.cases(allcases), ]
+```
+
+
+#### Scale continuous variables to facilitate comparisons
+```{r}
+mydata5 <- mydata5 %>% 
+  mutate(across(c(Age, PAD, WBV, Ventvol, TIV, WMHVol, Hippovol, AmyloidSuvr, SerumNFL, FHS_36, FHS_69, PRS, FEV1, GripStrength, WalkSpeed, Height), scale, .names = "{col}z"))
+```
+
+
+
+# 3 Summary Statistics
+\
+
+#### Create summary table by total and grouped by sex using qwraps package
+```{r}
+
+options(qwraps2_markup = "markdown", digits = 2)
+
+summary2 <-   #Summary used for table 1 without sex as a variable
+  list("Chronological age (years)" =
+         list("Range" = ~ paste(frmt(range(.data$Age, na.rm=T), digits=1), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$Age, na_rm=T, digits=1, show_n = "never", denote_sd = "paren")),
+       "Brain predicted age (years)" =
+         list("Range" = ~ paste(frmt(range(.data$BPA, na.rm=T), digits=1), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$BPA, na_rm=T, digits=1, show_n = "never", denote_sd = "paren")),
+       "Brain predicted age difference (years)" =
+         list("Range" = ~ paste(frmt(range(.data$PAD, na.rm=T), digits=1), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$PAD, na_rm=T, digits=1, show_n = "never", denote_sd = "paren")),
+       "Socioeconomic status" = 
+         list("Manual" = ~ qwraps2::n_perc0(.data$SocioStatus == "Manual", na_rm = T, show_symbol = T),
+              "Non-manual"= ~ qwraps2::n_perc0(.data$SocioStatus == "Non-manual", na_rm = T, show_symbol = T)),
+       "Educational attainment" =
+         list("None attempted" = ~ qwraps2::n_perc0(.data$Education == "None attempted", na_rm = T, show_symbol = T),
+             "School grade" = ~ qwraps2::n_perc0(.data$Education == "Vocational or GCSE", na_rm = T, show_symbol = T),
+             "Higher education" = ~ qwraps2::n_perc0(.data$Education == "A-level or higher", na_rm = T, show_symbol = T)),
+       "Childhood cognition (z-score)" = 
+         list("Range" = ~ paste(frmt(range(.data$Childcog, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$Childcog, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Smoking" =
+         list("Never smoked" = ~ qwraps2::n_perc0(.data$Smoking == "Never smoked", na_rm = T, show_symbol = T),
+             "Ex-smoker" = ~ qwraps2::n_perc0(.data$Smoking == "Ex-smoker", na_rm = T, show_symbol = T),
+             "Current smoker" = ~ qwraps2::n_perc0(.data$Smoking == "Current smoker", na_rm = T, show_symbol = T)),
+       "Major brain disorder" =
+         list("None" = ~ qwraps2::n_perc0(.data$MajorBrainDisorder == "None", na_rm = T, show_symbol = T),
+              "Present"= ~ qwraps2::n_perc0(.data$MajorBrainDisorder == "Present", na_rm = T, show_symbol = T)),
+       "Total intracranial volume (ml)" =
+         list("Range" = ~ paste(frmt(range(.data$TIV, na.rm=T), digits=0), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$TIV, na_rm=T, show_n = "never", denote_sd = "paren", digits=0)),
+       "Whole brain volume (ml)" =
+         list("Range" = ~ paste(frmt(range(.data$WBV, na.rm=T), digits=0), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$WBV, na_rm=T, show_n = "never", denote_sd = "paren", digits=0)),
+       "Ventricular volume (ml)" =
+         list("Range" = ~ paste(frmt(range(.data$Ventvol, na.rm=T), digits=2), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$Ventvol, na_rm=T, show_n = "never", denote_sd = "paren", digits=2)),
+       "Hippocampal volume (ml)" =
+         list("Range" = ~ paste(frmt(range(.data$Hippovol, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$Hippovol, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "White matter hyperintensity volume (ml)" =
+         list("Range" = ~ paste(frmt(range(.data$WMHVol, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$WMHVol, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "PACC score (z-score)" =
+         list("Number" = ~ length(na.omit(.data$PACC)),
+              "Range" = ~ paste(frmt(range(.data$PACC, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$PACC, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Amyloid status" =
+         list("Negative" = ~ qwraps2::n_perc0(.data$AmyloidStatus == "Negative", na_rm = T, show_symbol = T),
+              "Positive"= ~ qwraps2::n_perc0(.data$AmyloidStatus == "Positive", na_rm = T, show_symbol = T)),
+       "Amyloid SUVR" = 
+         list("Range" = ~ paste(frmt(range(.data$AmyloidSuvr, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$AmyloidSuvr, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Serum neurofilament light (pg/ml)" = 
+         list("Range" = ~ paste(frmt(range(.data$SerumNFL, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$SerumNFL, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "APOE ε4 status" =
+          list("Non-carrier"= ~ qwraps2::n_perc0(.data$ApoE4 == "Non-carrier", na_rm = T, show_symbol = T),
+               "Carrier" = ~ qwraps2::n_perc0(.data$ApoE4 == "Carrier", na_rm = T, show_symbol = T)),
+       "Alzheimer's Polygenic Risk Score (z-score)" = 
+         list("Number" = ~ length(na.omit(.data$PRS)),
+              "Range" = ~ paste(frmt(range(.data$PRS, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$PRS, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "rs1452628_T Allele number" =
+         list("No copies"= ~ qwraps2::n_perc0(.data$rs1452628_T == "0", na_rm = T, show_symbol = T),
+              "1 copy" = ~ qwraps2::n_perc0(.data$rs1452628_T == "1", na_rm = T, show_symbol = T),
+              "2 copies" = ~ qwraps2::n_perc0(.data$rs1452628_T == "2", na_rm = T, show_symbol = T)),
+       "Framingham Risk Score age 36" =
+         list("Number" = ~ length(na.omit(.data$FHS_36)),
+              "Range" = ~ paste(frmt(range(.data$FHS_36, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$FHS_36, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Framingham Risk Score age 69" =
+         list("Number" = ~ length(na.omit(.data$FHS_69)),
+              "Range" = ~ paste(frmt(range(.data$FHS_69, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$FHS_69, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Forced expiratory volume (L)" =
+         list("Number" = ~ length(na.omit(.data$FEV1)),
+              "Range" = ~ paste(frmt(range(.data$FEV1, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$FEV1, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Grip strength (kg)" =
+          list("Number" = ~ length(na.omit(.data$GripStrength)),
+              "Range" = ~ paste(frmt(range(.data$GripStrength, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$GripStrength, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Walking speed (m/s)" =
+         list("Number" = ~ length(na.omit(.data$WalkSpeed)),
+              "Range" = ~ paste(frmt(range(.data$WalkSpeed, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$WalkSpeed, na_rm=T, show_n = "never", denote_sd = "paren")))
+```
+
+```{r}
+by_sex <- summary_table(dplyr::group_by(mydata5, Sex), summary2)
+totalbysex <- summary_table(mydata5, summary2)
+table1 <- cbind(totalbysex, by_sex)
+print(table1, 
+      rtitle = "Summary Statistics",
+      cnames = c("Total (N=456)", "Female (N=225)", "Male (N=231)"))
+```
+
+\
+#### Create plots of age, BPA and sex differences
+```{r convert ages to long data, include=F}
+#Convert data to long form, reclassify agetype as a factor
+longages <- pivot_longer(mydata5, c(Age, BPA), names_to = "agetype", values_to = "age") #create long data of age at scan and brain predicted age  
+longages$agetype <- as.factor(longages$agetype)
+levels(longages$agetype) #check levels and order - age at scan, then BPA
+```
+
+```{r overlying density plots, echo=F}
+(age_density <- ggplot(longages, aes(x = age, fill = agetype)) +
+    geom_density(alpha=1, colour = "black", size=0.25, position = 'identity') +
+   scale_fill_manual(values = c("grey80", NA), name = NULL, labels = c("Chronological age", "Brain predicted age")) +
+    theme_bw() +
+    xlab("\nAge (years)") +
+    ylab("Density\n") +
+   theme(panel.grid.major = element_line(colour = "black", size = 0.05),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+         legend.position = "bottom"))  
+```
+
+
+
+
+#### Summary of major brain disorders
+```{r}
+kable(summary(as.factor(mydata5$Diagnosis)))
+```
+
+
+\
+
+#### Relationship between age and brain predicted age
+```{r age scatterplot, echo=F}
+(bpa_age_scatterhisto <- ggplot(mydata5, aes(x = Age, y = BPA)) +
+    geom_point( size = 1, alpha = 0.7) +
+    theme_bw() +
+    geom_smooth(method = 'lm', colour = "black", size = 0.4, fill = "black", alpha = 0.15) +
+   stat_cor(method = "pearson") +
+    labs(x = "\nAge at Scan (years)", y = "Brain Predicted Age (years)\n") +
+    theme_bw() +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.05),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(size = 12),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 12)))
+```
+\
+\
+
+
+```{r, echo=F, warning=F, results=F}
+breaks <- pretty(range(mydata5$BPA), n = nclass.FD(mydata5$BPA), min.n = 1) #define historgram bin break points
+bwidth <- breaks[2]-breaks[1]
+
+(sex_histogram <- ggplot(mydata5, aes(x = BPA, fill=Sex)) +   #Create histogram comparing BPA by sex
+    geom_histogram(alpha=0.75, 
+                   color= "white", 
+                   size=0.05, 
+                   position = 'identity',
+                   binwidth=bwidth) +
+        scale_fill_manual(values= c("black", "grey70"),
+                          labels = c("Female", "Male")) +
+    scale_color_manual(values= "white") +
+    scale_x_continuous(limits = c(40,100), breaks=c(seq(40, 100, 10))) +
+    theme_bw() +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.05),
+          panel.grid.minor = element_blank(),
+          legend.position = "bottom",
+          legend.title = element_blank()) +
+    xlab("\nBrain predicted age (years)") +
+    ylab("Count\n"))
+    
+```
+
+
+
+```{r, fig.height=7, fig.width=5}
+(sumstatsgraph <- ggarrange(age_density, sex_histogram, 
+                              ncol=1, nrow=2,
+                              labels = "AUTO"))
+```
+
+
+
+
+# 4 Create model of all variables to check overall variance explained
+
+```{r}
+overalllm <- lm(PAD ~ Agez + Sex + Childcog + Education + SocioStatus + Smoking + TIVz  + WBVz + Ventvolz + Hippovolz + WMHVolz + PACC + AmyloidSuvrz + ApoE4 + PRS + rs1452628_T + SerumNFLz + FHS_36z + FHS_69z + MajorBrainDisorder + FEV1z + GripStrengthz + WalkSpeedz + Heightz, mydata5)
+(summ(overalllm, confint = T))
+```
+
+
+
+
+
+
+
+
+# 5 Early lifecourse and demographic contributors to brain age {.tabset}
+
+## Chronological age
+```{r}
+agelm <- lm(PAD ~ Age, data=mydata5)
+
+summ(agelm, robust="HC1", digits = 1,
+            confint=T)
+```
+
+
+```{r}
+plot(agelm)  #check linearity assumptions
+```
+
+## Sex
+```{r}
+sexlm <- lm(PAD ~ Sex + Age, data=mydata5) 
+summ(sexlm, digits = 3,
+            confint=T)
+```
+
+```{r}
+plot(sexlm)  #check linearity assumptions
+```
+
+
+```{r}
+coefssex <-  tidy(sexlm , conf.int = TRUE)  #modify estimate and confidence intervals for figure display
+coefssex <- coefssex %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefssex$estimate, coefssex$conf.low, coefssex$conf.high )) %>% 
+  dplyr::filter(term=="Sexmale")
+```
+
+
+
+## Educational attainment
+```{r}
+educationlm <- lm(PAD ~ Education + Sex + Age, data=mydata5)
+summ(educationlm, robust="HC1", digits = 1,
+            confint=T)
+```
+
+```{r}
+plot(educationlm)  #check linearity assumptions
+```
+                         
+```{r}
+coefsedu <-  tidy(educationlm , conf.int = TRUE)  #modify estimate and confidence intervals for graphical display
+coefsedu <- coefsedu %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsedu$estimate, coefsedu$conf.low, coefsedu$conf.high )) %>% 
+    dplyr::filter(term=="EducationVocational or GCSE" | term== "EducationA-level or higher") 
+```
+## Socioeconomic status
+```{r}
+sociolm <- lm(PAD ~ SocioStatus + Sex + Age, data=mydata5)
+summ(sociolm, robust="HC1", digits = 1,
+            confint=T)
+```
+
+```{r}
+plot(sociolm)  #check linearity assumptions
+```
+
+
+```{r}
+coefssocio <-  tidy(sociolm , conf.int = TRUE)  #modify estimate and confidence intervals for graphical display
+coefssocio <- coefssocio %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefssocio$estimate, coefssocio$conf.low, coefssocio$conf.high )) %>% 
+  dplyr::filter(term=="SocioStatusNon-manual")
+
+```
+
+## Childhood cognition (IQ)
+```{r}
+childcoglm <- lm(PAD ~ Childcog + Sex + Age, data=mydata5)
+summ(childcoglm, robust="HC1", digits = 1,
+            confint=T)
+```
+
+```{r}
+plot(childcoglm)  #check linearity assumptions
+```
+
+```{r}
+coefschildcog <-  tidy(childcoglm , conf.int = TRUE)  #modify estimate and confidence intervals for graphical display
+coefschildcog <- coefschildcog %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefschildcog$estimate, coefschildcog$conf.low, coefschildcog$conf.high )) %>% 
+  dplyr::filter(term=="Childcog")
+
+```
+
+## Modify coeficients for graphical presentation
+```{r}
+coefsel <- rbind(coefssex,  coefschildcog, coefsedu, coefssocio)
+
+# Add nicer names
+coefsel$names <- factor(c( "Male", "Childhood IQ (z score)", 
+                 "Vocational or GCSE", "A level or higher", "Non-manual social class"), 
+                 levels = c("Male", "Childhood IQ (z score)", 
+                 "Vocational or GCSE", "A level or higher", "Non-manual social class"))
+
+coefsel$type = factor(c("Sex",
+               "Childhood cognition",
+               rep("Education level (reference: none attempted)", 2),
+               "Socioeconomic Status (reference: manual social class)"), 
+               levels = c("Sex", "Childhood cognition", "Education level (reference: none attempted)",
+               "Socioeconomic Status (reference: manual social class)"))
+
+```
+
+
+# 6 Midlife contributions to brain age - cardiovascular risk (FHS) at 36 and 69 {.tabset}
+
+## FHS at age 36
+
+```{r early adult lifecourse linear regression}
+FHS36lm <- lm(PAD ~  FHS_36z + SocioStatus, data=mydata5)
+summ(FHS36lm, robust="HC1", digits = 4,
+            confint=T)
+
+```
+
+```{r}
+plot(FHS36lm)
+```
+
+
+#### Scatterplot with FHS 36
+\
+```{r, echo=F, warnings=F}
+(bpa_FHS36_scatter <- ggplot(mydata5, aes(x = FHS_36, y = BPA)) +
+    geom_smooth(method = 'lm', colour = "black", size=0.4, fill = "grey75") +
+    geom_point( size = 1, alpha = 0.7) +
+    theme_bw() +
+   stat_cor(method = "pearson", label.x.npc = 0.68, label.y.npc = 0) +
+    labs(x = "Framingham risk score at age 36 (score)", y = "Brain Predicted Age (years)") +
+    theme_bw() +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.08),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(size = 12),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 12)))
+```
+
+
+\
+
+## FHS age 69
+
+\
+```{r}
+FHS69lm <- lm(PAD ~  FHS_69z + SocioStatus, data=mydata5)
+
+summ(FHS69lm, robust="HC1", digits = 4,
+            confint=T)
+```
+
+```{r}
+plot(FHS69lm)  # Check linearity assumptions
+```
+
+#### Scatter plot of FHS 69
+
+```{r, echo=F}
+(bpa_FHS69_scatter <- ggplot(mydata5, aes(x = FHS_69, y = BPA)) +
+    geom_smooth(method = 'lm', colour = "black", size=0.4, fill = "grey75") +
+    geom_point( size = 1, alpha = 0.7) +
+    theme_bw() +
+   stat_cor(method = "pearson", label.x.npc = 0.68, label.y.npc = 0) +
+    labs(x = "Framingham risk score at age 69 (score)", y = "Brain Predicted Age (years)") +
+    theme_bw() +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.08),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(size = 12),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 12)))
+```
+
+#### Combining coefficients for presentation
+
+```{r}
+coefs36 <-  tidy(FHS36lm , conf.int = TRUE)   #modify estimate and confidence intervals for graphical display
+coefs36 <- coefs36 %>% 
+  dplyr::filter(term=="FHS_36z")
+coefs36 <- coefs36 %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefs36$estimate, coefs36$conf.low, coefs36$conf.high ))
+
+```
+
+```{r}
+coefs69 <-  tidy(FHS69lm , conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefs69 <- coefs69 %>% 
+  dplyr::filter(term=="FHS_69z") 
+coefs69 <- coefs69 %>% 
+  dplyr::mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefs69$estimate, coefs69$conf.low, coefs69$conf.high ))
+
+```
+
+```{r}
+coefsFHS <- dplyr::union(coefs36, coefs69)  #Create table of coefficients for graphical display
+# Add nicer names
+coefsFHS$names <- factor(c("FRS age 36 (z score)", "FRS age 69 (z score)"), levels = c("FRS age 69 (z score)", "FRS age 36 (z score)"))
+# Group the variables 
+coefsFHS$type = rep("Cardiovascular Risk", 2)
+```
+
+## Compare early life and mid life factors contributing to brain age with a Williams test
+```{r}
+earlymidcomparedata <- na.omit(mydata5, cols=seq_along(c(childcog, FHS36)))
+dim(earlymidcomparedata)
+# Create stepwise correlations of the 3 variables
+cor12 <- cor.test(earlymidcomparedata$PAD, earlymidcomparedata$FHS_36z)$estimate
+cor13 <- cor.test(earlymidcomparedata$PAD, earlymidcomparedata$Childcog)$estimate
+cor23 <- cor.test(earlymidcomparedata$Childcog, earlymidcomparedata$FHS_36z)$estimate
+
+psych::r.test(n = 305, r12=cor12, r13=cor13, r23=cor23) #Apply the williams test
+
+```
+
+
+
+# 7 Contemporary correlate of brain age: Imaging, genetic/blood biomarker and physical factors {.tabset}
+
+## Imaging findings
+#### Whole brain volume
+```{r imaging with WBV}
+imagingWBV <- lm(PAD ~ WBVz + TIVz + Sex + Age, data=mydata5)
+summ(imagingWBV, robust="HC1", scale =T, digits = 4,
+            confint=T)
+```
+
+```{r}
+#Check linearity assumptions
+plot(imagingWBV)
+```
+
+```{r}
+coefswbv <-  tidy(imagingWBV , conf.int = TRUE)  #modify estimate and confidence intervals for graphical display
+coefswbv <- coefswbv %>% 
+  dplyr::filter(term=="WBVz") 
+coefswbv <- coefswbv %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefswbv$estimate, coefswbv$conf.low, coefswbv$conf.high ))
+
+
+```
+
+```{r, echo=F}
+(bpa_WBV_scatter <- ggplot(mydata5, aes(x = WBV, y = BPA)) +  #Create scatterplot of WBV verse brain PAD
+    geom_smooth(method = 'lm', colour = "black", size=0.4, fill = "grey75") +
+    geom_point( size = 1, alpha = 0.7) +
+    theme_bw() +
+   stat_cor(method = "pearson", label.x.npc = 0.68, label.y.npc = 0) +
+    labs(x = "Whole brain volume (ml)", y = "Brain Predicted Age (years)") +
+    theme_bw() +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.08),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(size = 12),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 12)))
+```
+
+
+#### Hippocampal volume
+```{r imaging with hippo}
+imaginghippo <- lm(PAD ~ Hippovolz + Sex + TIVz + Age, data=mydata5)
+
+summ(imaginghippo, robust="HC1", scale =T, digits = 4,
+            confint=T)
+```
+
+```{r}
+plot(imaginghippo) # check linearity assumptions
+```
+
+
+```{r}
+coefshippo <-  tidy(imaginghippo , conf.int = TRUE)   #modify estimate and confidence intervals for graphical display
+
+coefshippo <- coefshippo %>%
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefshippo$estimate, coefshippo$conf.low, coefshippo$conf.high )) %>% 
+  dplyr::filter(term=="Hippovolz")
+
+```
+
+
+
+#### Ventricular volume
+```{r imaging with vents, echo=F}
+imagingvent <- lm(PAD ~ Ventvolz + TIVz + Sex + Age, data=mydata5)
+summ(imagingvent, robust="HC1", scale =T, digits = 4,
+            confint=T)
+```
+
+```{r}
+plot(imagingvent)
+```
+
+\
+```{r}
+coefsvent <-  tidy(imagingvent , conf.int = TRUE)   #modify estimate and confidence intervals for graphical display
+coefsvent <- coefsvent %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsvent$estimate, coefsvent$conf.low, coefsvent$conf.high )) %>% 
+  dplyr::filter(term=="Ventvolz")
+
+```
+
+#### Imaging WMH
+```{r imaging with WMH}
+imagingwmh <- lm(PAD ~ WMHVolz + TIVz + Sex + Age, data=mydata5)
+summ(imagingwmh, robust="HC1", scale =T, digits = 4,
+            confint=T)
+```
+
+```{r}
+plot(imagingwmh)
+```
+
+\
+```{r}
+coefsWMH <-  tidy(imagingwmh, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsWMH <- coefsWMH %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsWMH$estimate, coefsWMH$conf.low, coefsWMH$conf.high )) %>% 
+  dplyr::filter(term=="WMHVolz")
+
+```
+
+
+#### Combine results of brain imaging models for graphical display
+```{r}
+coefsimaging <- rbind(coefswbv, coefshippo, coefsvent, coefsWMH)
+# Add nicer names
+coefsimaging$names <- factor(c( "Whole brain (z score)", "Hippocampi (z score)", "Ventricles (z score)", "WMH (z score)"), levels = c("WMH (z score)", "Ventricles (z score)", "Hippocampi (z score)", "Whole brain (z score)"))
+# Group the variables 
+coefsimaging$type = rep("MR Imaging volumes", 4)
+
+```
+
+WMH scatter plot
+```{r, echo=F}
+(bpa_WMH_scatter <- ggplot(mydata5, aes(x = WMHVol, y = BPA)) +
+    geom_smooth(method = 'lm', colour = "black", size=0.4, fill = "grey75") +
+    geom_point( size = 1, alpha = 0.7) +
+    theme_bw() +
+   stat_cor(method = "pearson", label.x.npc = 0.68, label.y.npc = 0) +
+    labs(x = "White matter hyperintensities (ml)", y = "Brain Predicted Age (years)") +
+    theme_bw() +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.08),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(size = 12),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 12)))
+```
+
+
+
+
+## Biomarkers
+
+#### NFL
+```{r}
+NFLlm <- lm(PAD ~ SerumNFLz + Sex + Age, data = mydata5)
+summNFL <- summ(NFLlm, robust="HC1", digits = 4,
+            confint=T)
+summNFL
+```
+
+
+```{r}
+coefsNFL <-  tidy(NFLlm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsNFL <- coefsNFL %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsNFL$estimate, coefsNFL$conf.low, coefsNFL$conf.high )) %>% 
+  dplyr::filter(term=="SerumNFLz")
+
+```
+
+```{r}
+plot(NFLlm)  #check linearity assumptions
+```
+\
+
+```{r}
+#ggsave("Figures/NFLscatter75.png",  bpa_NFL_scatter, height=10, width=18, units="cm" )
+```
+
+
+#### NFL removing outliers
+
+
+```{r}
+#Identidy NFL outliers by Tukey's Fences
+NFLoutliercutoff <- summary(mydata5$SerumNFL)[["3rd Qu."]] + 1.5*IQR(mydata5$SerumNFL)
+# Create subset of participants who are outliers to compare to remainder of cohort
+NFLoutliers <- mydata5 %>% 
+  filter(mydata5$SerumNFL > NFLoutliercutoff)
+```
+
+Scatterplot with NFL
+\
+```{r, echo=F}
+(bpa_NFL_scatter <- ggplot(mydata5, aes(x = SerumNFL, y = BPA)) +
+    geom_smooth(method = 'lm', colour = "black", size=0.4, fill = "grey75") +
+    geom_point( size = 1, alpha = 0.7) +
+    theme_bw() +
+   stat_cor(method = "pearson", label.x.npc = 0.68, label.y.npc = 0) +
+    labs(x = "Serum NFL (pg/ml)", y = "Brain Predicted Age (years)") +
+    theme_bw() +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.08),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(size = 12),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 12)))
+```
+
+
+#### Fibrillar amyloid beta: Continuous (SUVR) and discrete (amyloid) amyloid beta measurement
+
+Continuous amyloid measurement (SUVR) scatterplot
+```{r}
+(bpa_amyloid_scatter <- ggplot(mydata5, aes(x = AmyloidSuvr, y = BPA)) +
+    geom_smooth(method = 'lm', colour = "black", size=0.4, fill = "grey75") +
+    geom_point( size = 1, alpha = 0.7) +
+    theme_bw() +
+   stat_cor(method = "pearson", label.x.npc = 0.68, label.y.npc = 0) +
+    labs(x = "Amyloid SUVR", y = "Brain Predicted Age (years)") +
+    theme_bw() +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.08),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(size = 12),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 12)))
+```
+
+Discrete amyloid measurement: amyloid positive verse negative
+```{r}
+(bpa_amyloid_box <- ggplot(mydata5, aes(x=AmyloidStatus, y=BPA)) +
+  geom_boxplot()) +
+  geom_jitter(size = 0.7, alpha=0.5, colour="grey30" )
+```
+
+
+Continuous amyloid regression model
+```{r SUVR lm}
+suvrlm <- lm(PAD ~ AmyloidSuvrz + Sex + Age, data = mydata5)
+
+summ(suvrlm, robust="HC1", digits = 4,
+            confint=T)
+```
+
+```{r}
+plot(suvrlm)
+```
+
+
+Discrete amyloid regression model
+
+```{r}
+amyloidlm <- lm(PAD ~ AmyloidStatus + Sex + Age, data = mydata5)
+
+summ(amyloidlm, robust="HC1", digits = 4,
+            confint=T)
+```
+
+
+```{r}
+plot(amyloidlm)
+```
+
+```{r}
+coefssuvr <-  tidy(suvrlm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefssuvr <- coefssuvr %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefssuvr$estimate, coefssuvr$conf.low, coefssuvr$conf.high )) %>% 
+  dplyr::filter(term=="AmyloidSuvrz")
+
+```
+
+
+
+
+```{r}
+coefsbiomarker <- rbind(coefsNFL, coefssuvr)
+
+# Add nicer names and variable types
+coefsbiomarker$names <- c( "Serum NFL (z score)", "Florbetapir SUVR (z score)")
+coefsbiomarker$type = rep("Blood and Imaging Biomarkers", 2)
+
+
+```
+
+
+
+## Genetics
+
+#### APOE 
+
+
+```{r genetics}
+
+apoe4lm <- lm(PAD ~ ApoE4, data = mydata5)
+
+summ(apoe4lm, robust="HC1", digits = 4,
+            confint=T)
+anovaapo <- anova(apoe4lm)
+anovaapo
+```
+
+```{r}
+plot(apoe4lm)  # Check linearity assumptions
+```
+
+
+```{r}
+coefsapoe <-  tidy(apoe4lm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsapoe <- coefsapoe %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsapoe$estimate, coefsapoe$conf.low, coefsapoe$conf.high )) %>% 
+  dplyr::filter(term !="(Intercept)")
+
+```
+
+#### Brain age SNP
+```{r snp}
+snplm <- lm(PAD ~ rs1452628_T, data = mydata5)
+
+summ(snplm, robust="HC1", digits = 4,
+            confint=T)
+anova(snplm)
+```
+
+```{r}
+plot(snplm) #Check linearity assumptions
+```
+
+```{r}
+coefssnp <-  tidy(snplm, conf.int = TRUE)   #modify estimate and confidence intervals for graphical display
+coefssnp <- coefssnp %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefssnp$estimate, coefssnp$conf.low, coefssnp$conf.high )) %>% 
+  dplyr::filter(term !="(Intercept)")
+
+```
+
+
+#### Polygenic risk score for Alzheimer's Disease
+
+```{r PRS}
+PRSlm <- lm(PAD ~ PRS, data = mydata5)
+
+summ(PRSlm, robust="HC1", digits = 4,
+            confint=T)
+anova(PRSlm)
+```
+
+```{r}
+plot(PRSlm)  # Check linearity assumptions
+```
+
+
+```{r}
+coefsPRS <-  tidy(PRSlm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsPRS <- coefsPRS %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsPRS$estimate, coefsPRS$conf.low, coefsPRS$conf.high )) %>% 
+  dplyr::filter(term !="(Intercept)")
+
+```
+
+#### Combine genetic results for graphical display
+
+```{r}
+coefsgenetics <- rbind(coefssnp, coefsPRS, coefsapoe)
+coefsgenetics
+
+# Add nicer names and variable types
+coefsgenetics$names <- c("rs1452628_T heterozygote", "rs1452628_T homozygote",  "AD Polygenic risk score (z score)", "APOE ε4 carrier")
+coefsgenetics$type = rep("Genetics", 4)
+
+```
+
+
+## Cognition
+
+Cognition Scatterplot
+```{r, echo=F}
+(bpa_cog_scatter <- ggplot(mydata5, aes(x = PACC, y = BPA)) +
+    geom_smooth(method = 'lm', colour = "black", size=0.4, fill = "grey75") +
+    geom_point( size = 1, alpha = 0.7) +
+    theme_bw() +
+   stat_cor(method = "pearson", label.x.npc = 0.68, label.y.npc = 0) +
+    labs(x = "PACC (z score)", y = "Brain Predicted Age (years)") +
+    theme_bw() +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.08),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(size = 12),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 12)))
+```
+
+Covariates chosen as those that have shown to contribute to PACC
+\
+
+```{r cognitionlm with lifecourse}
+coglm <- lm(PAD ~ PACC + Sex + Education + Childcog + SocioStatus + Age, data = mydata5)
+
+summ(coglm, robust="HC1", digits = 4,
+            confint=T)
+anova(coglm)
+```
+
+
+
+```{r}
+plot(coglm)  #check linearity assumptions
+```
+
+
+```{r}
+coefscog <-  tidy(coglm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefscog <- coefscog %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefscog$estimate, coefscog$conf.low, coefscog$conf.high )) %>% 
+  dplyr::filter(term =="PACC")
+
+```
+
+```{r}
+coefscog$names <- c( "PACC (z score)")
+coefscog$type = rep("Cognition", 1)
+
+```
+
+
+## Comorbidities - major brain disorders
+
+```{r}
+(bdisorderbox <- ggplot(mydata5, aes(x=MajorBrainDisorder, y=BPA)) +
+  geom_boxplot() +
+  geom_jitter(size = 0.7, alpha=0.5, colour="grey30" ) +
+   labs(x = "Major Brain Disorder", y = "Brain Predicted Age (years)") +
+    theme(panel.grid.major = element_line(colour = "black", size = 0.08),
+          panel.grid.minor = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(size = 12),
+          axis.text = element_text(size = 12),
+          axis.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 12)))
+```
+
+
+```{r}
+bdisorderlm <- lm(PAD ~ MajorBrainDisorder + Age + Sex, data = mydata5)
+
+summ(bdisorderlm, robust="HC1", digits = 4,
+     confit = T)
+```
+
+```{r}
+plot(bdisorderlm)
+```
+
+```{r}
+coefsdisorder <-  tidy(bdisorderlm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsdisorder <- coefsdisorder %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsdisorder$estimate, coefsdisorder$conf.low, coefsdisorder$conf.high )) %>% 
+  dplyr::filter(term =="MajorBrainDisorderPresent")
+
+```
+```{r}
+coefsdisorder$names <- c( "Major brain disorder present")
+coefsdisorder$type = rep("Comorbidities", 1)
+
+```
+
+
+
+
+## Physical attributes regression
+
+#### FEV1
+
+```{r FEV1 lm}
+FEV1lm <- lm(PAD ~ FEV1z + Smoking + Heightz +Age + Sex, data = mydata5)
+
+summ(FEV1lm, robust="HC1", digits = 4,
+            confint=T)
+```
+
+```{r}
+plot(FEV1lm)  # Check linearity assumptions
+```
+
+
+```{r}
+coefsFEV1 <-  tidy(FEV1lm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsFEV1 <- coefsFEV1 %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsFEV1$estimate, coefsFEV1$conf.low, coefsFEV1$conf.high )) %>%
+  dplyr::filter(term == "FEV1z")
+
+```
+
+#### Grip strength 
+
+```{r grip lm}
+griplm <- lm(PAD ~ GripStrengthz + Sex + Age, data = mydata5)
+
+summ(griplm, robust="HC1", digits = 4,
+            confint=T)
+```
+
+```{r}
+plot(griplm)  # Check linearity assumptions
+```
+
+
+```{r}
+coefsgrip <-  tidy(griplm, conf.int = TRUE)   #modify estimate and confidence intervals for graphical display
+coefsgrip <- coefsgrip %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsgrip$estimate, coefsgrip$conf.low, coefsgrip$conf.high )) %>%
+  dplyr::filter(term == "GripStrengthz")
+
+```
+
+#### Walking speed
+
+```{r walkingspeed lm}
+walklm <- lm(PAD ~ WalkSpeedz  + Heightz + Sex + Age, data = mydata5)
+
+summ(walklm, robust="HC1", digits = 4,
+            confint=T)
+```
+
+```{r}
+plot(walklm) # Check linearity assumptions
+```
+
+```{r}
+coefswalk <-  tidy(walklm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefswalk <- coefswalk %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefswalk$estimate, coefswalk$conf.low, coefswalk$conf.high )) %>%
+  dplyr::filter(term == "WalkSpeedz")
+
+```
+#### Combine physical attributes for graphical display
+```{r}
+coefsphysical <- rbind(coefsFEV1, coefsgrip, coefswalk)
+
+# Add nicer names and variable types
+coefsphysical$names <- c("FEV1 (z score)", "Grip strength (z score)",  "Walking speed (z score)")
+coefsphysical$type = rep("Physical metrics", 3)
+
+```
+
+
+# 8 Combined Scatterplots and boxplots
+```{r, echo=F, fig.width = 11, fig.height = 13}
+combined_scatter <- ggarrange(bpa_FHS36_scatter, bpa_FHS69_scatter, bpa_NFL_scatter, bpa_amyloid_scatter, bpa_cog_scatter, bdisorderbox, bpa_WBV_scatter, bpa_WMH_scatter, 
+                              ncol=2, nrow=4,
+                              labels = "AUTO")
+combined_scatter
+```
+
+
+\
+# 9 Combined forest plots 
+
+Combine model results to allow for creation of overall forest plots.
+```{r}
+fullcoefsassoc <- rbind(coefsbiomarker, coefsgenetics, coefscog, coefsdisorder, coefsphysical, coefsel, coefsFHS, coefsimaging)
+```
+
+```{r}
+fullcoefsassoc$type <- factor(fullcoefsassoc$type, levels=c("Sex", "Childhood cognition", "Education level (reference: none attempted)", "Socioeconomic Status (reference: manual social class)", "Cardiovascular Risk", "Genetics", "Blood and Imaging Biomarkers", "Cognition", "Comorbidities", "Physical metrics", "MR Imaging volumes"))
+```
+
+
+```{r}
+fullcoefsassoc$names <- fct_relevel(fullcoefsassoc$names, "A level or higher", "Florbetapir SUVR (z score)", "rs1452628_T homozygote", "rs1452628_T heterozygote", "WMH (z score)", "Hippocampi (z score)", "Ventricles (z score)", "Walking speed (z score)", "Grip strength (z score)") 
+```
+
+```{r, fig.width = 8, fig.height = 10}
+
+(fullassocgraph <- ggplot(fullcoefsassoc, aes(estimate, names )) + 
+  geom_point(aes(), size=0.9)+ 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0, size = 0.4)+
+  geom_text(aes(x = Inf, label = display_ests), vjust = 0.5, colour = "black", hjust = -0.1, size = 3.5) +
+  coord_cartesian(clip = "off") +
+  geom_vline(xintercept = 0, linetype = 2)+
+  theme_bw(base_size = 12)+
+  theme(plot.margin = unit(c(1,4,0.5,0.5), "cm")) +
+   theme(panel.border = element_rect(fill = NA, colour="black", size = 0.33)) +
+  labs(x =  NULL,y = NULL, title = NULL)+
+   facet_col(~type, scale = "free_y", space = "free") +
+   theme(strip.background = element_rect(fill="grey85", colour="black")))  
+```
+
+
+```{r}
+#ggsave("Figures/combinedgraph17.png", plot=fullassocgraph, height=7.5, width = 7.5)
+```
+
+
+
+
+# 10 Supplementary Material {.tabset}
+
+## Appendix 1 - summary data of those in the sample compared to the whole Insight 46 cohort and those participants with complete data
+
+Create summary table outline used in the appendix
+```{r}
+summary1 <-   #Summary outline for use in the appendix
+  list("Chronological age (years)" =
+         list("Number" = ~ length(na.omit(.data$Age)),
+              "Range" = ~ paste(frmt(range(.data$Age, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$Age, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Brain predicted age (years)" =
+         list("Number" = ~ length(na.omit(.data$BPA)),
+              "Range" = ~ paste(frmt(range(.data$BPA, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$BPA, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Brain predicted age difference (years)" =
+         list("Number" = ~ length(na.omit(.data$PAD)),
+              "Range" = ~ paste(frmt(range(.data$PAD, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$PAD, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Sex" = 
+         list("Female" = ~ qwraps2::n_perc0(.data$Sex == "female", na_rm = T, show_symbol = T)),
+       "Socioeconomic status" = 
+         list("Manual" = ~ qwraps2::n_perc0(.data$SocioStatus == "Manual", na_rm = T, show_symbol = T),
+              "Non-manual"= ~ qwraps2::n_perc0(.data$SocioStatus == "Non-manual", na_rm = T, show_symbol = T)),
+       "Educational attainment" =
+         list("None attempted" = ~ qwraps2::n_perc0(.data$Education == "None attempted", na_rm = T, show_symbol = T),
+             "School grade" = ~ qwraps2::n_perc0(.data$Education == "Vocational or GCSE", na_rm = T, show_symbol = T),
+             "Higher education" = ~ qwraps2::n_perc0(.data$Education == "A-level or higher", na_rm = T, show_symbol = T)),
+       "Childhood cognition (z-score)" = 
+         list("Number" = ~ length(na.omit(.data$Childcog)),
+              "Range" = ~ paste(frmt(range(.data$Childcog, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$Childcog, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Smoking" =
+         list("Never smoked" = ~ qwraps2::n_perc0(.data$Smoking == "Never smoked", na_rm = T, show_symbol = T),
+             "Ex-smoker" = ~ qwraps2::n_perc0(.data$Smoking == "Ex-smoker", na_rm = T, show_symbol = T),
+             "Current smoker" = ~ qwraps2::n_perc0(.data$Smoking == "Current smoker", na_rm = T, show_symbol = T)),
+       "Major brain disorder" =
+         list("None" = ~ qwraps2::n_perc0(.data$MajorBrainDisorder == "None", na_rm = T, show_symbol = T),
+              "Present"= ~ qwraps2::n_perc0(.data$MajorBrainDisorder == "Present", na_rm = T, show_symbol = T)),
+       "Total intracranial volume (ml)" =
+         list("Number" = ~ length(na.omit(.data$TIV)),
+              "Range" = ~ paste(frmt(range(.data$TIV, na.rm=T), digits=0), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$TIV, na_rm=T, show_n = "never", denote_sd = "paren", digits=0)),
+       "Whole brain volume (ml)" =
+         list("Number" = ~ length(na.omit(.data$WBV)),
+              "Range" = ~ paste(frmt(range(.data$WBV, na.rm=T), digits=0), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$WBV, na_rm=T, show_n = "never", denote_sd = "paren", digits=0)),
+       "Ventricular volume (ml)" =
+         list("Number" = ~ length(na.omit(.data$Ventvol)),
+              "Range" = ~ paste(frmt(range(.data$Ventvol, na.rm=T), digits=2), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$Ventvol, na_rm=T, show_n = "never", denote_sd = "paren", digits=2)),
+       "Hippocampal volume (ml)" =
+         list("Number" = ~ length(na.omit(.data$Hippovol)),
+              "Range" = ~ paste(frmt(range(.data$Hippovol, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$Hippovol, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "White matter hyperintensity volume (ml)" =
+         list("Number" = ~ length(na.omit(.data$WMHVol)),
+              "Range" = ~ paste(frmt(range(.data$WMHVol, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$WMHVol, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "PACC score (z-score)" =
+         list("Number" = ~ length(na.omit(.data$PACC)),
+              "Range" = ~ paste(frmt(range(.data$PACC, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$PACC, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Amyloid status" =
+         list("Negative" = ~ qwraps2::n_perc0(.data$AmyloidStatus == "Negative", na_rm = T, show_symbol = T),
+              "Positive"= ~ qwraps2::n_perc0(.data$AmyloidStatus == "Positive", na_rm = T, show_symbol = T)),
+       "Amyloid SUVR" = 
+        list("Number" = ~ length(na.omit(.data$AmyloidSuvr)),
+              "Range" = ~ paste(frmt(range(.data$AmyloidSuvr, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$AmyloidSuvr, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Serum Neurofilament light (pg/ml)" = 
+         list("Number" = ~ length(na.omit(.data$SerumNFL)),
+              "Range" = ~ paste(frmt(range(.data$SerumNFL, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$SerumNFL, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "APOE ε4 status" =
+          list("Non-carrier"= ~ qwraps2::n_perc0(.data$ApoE4 == "Non-carrier", na_rm = T, show_symbol = T),
+               "Carrier" = ~ qwraps2::n_perc0(.data$ApoE4 == "Carrier", na_rm = T, show_symbol = T)),
+       "Alzheimer's Polygenic Risk Score (z-score)" = 
+         list("Number" = ~ length(na.omit(.data$PRS)),
+              "Range" = ~ paste(frmt(range(.data$PRS, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$PRS, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "rs1452628_T Allele number" =
+         list("No copies"= ~ qwraps2::n_perc0(.data$rs1452628_T == "0", na_rm = T, show_symbol = T),
+              "1 copy" = ~ qwraps2::n_perc0(.data$rs1452628_T == "1", na_rm = T, show_symbol = T),
+              "2 copies" = ~ qwraps2::n_perc0(.data$rs1452628_T == "2", na_rm = T, show_symbol = T)),
+       "Framingham Risk Score age 36" =
+         list("Number" = ~ length(na.omit(.data$FHS_36)),
+              "Range" = ~ paste(frmt(range(.data$FHS_36, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$FHS_36, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Framingham Risk Score age 69" =
+         list("Number" = ~ length(na.omit(.data$FHS_69)),
+              "Range" = ~ paste(frmt(range(.data$FHS_69, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$FHS_69, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "FEV1 (L)" =
+         list("Number" = ~ length(na.omit(.data$FEV1)),
+              "Range" = ~ paste(frmt(range(.data$FEV1, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$FEV1, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Grip strength (kg)" =
+          list("Number" = ~ length(na.omit(.data$GripStrength)),
+              "Range" = ~ paste(frmt(range(.data$GripStrength, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$GripStrength, na_rm=T, show_n = "never", denote_sd = "paren")),
+       "Walking speed (m/s)" =
+         list("Number" = ~ length(na.omit(.data$WalkSpeed)),
+              "Range" = ~ paste(frmt(range(.data$WalkSpeed, na.rm=T)), collapse=', '),
+              "Mean (SD)" =~ qwraps2::mean_sd(.data$WalkSpeed, na_rm=T, show_n = "never", denote_sd = "paren")))
+```
+
+
+
+
+```{r}
+allsummary <- summary_table(allcases, summary1)
+mysummary <- summary_table(mydata5, summary1)
+completesummary <- summary_table(completedata, summary1)
+nfloutliersummary <- summary_table(NFLoutliers, summary1)
+```
+
+
+
+
+
+```{r}
+comparisonsummary <- cbind(mysummary, completesummary, allsummary, nfloutliersummary)
+print(comparisonsummary, 
+      rtitle = "Summary Statistics",
+      cnames = c("Sample used in study", "Complete cases", "All Insight 46 participants", "sNFL outliers"))
+```
+
+
+
+## Sensitivity analysis
+
+### Sex
+```{r}
+agelesssexlm <- lm(PAD ~ Sex, data=mydata5) 
+coefsagelesssex <-  tidy(agelesssexlm , conf.int = TRUE)  #modify estimate and confidence intervals for figure display
+coefsagelesssex <- coefsagelesssex %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelesssex$estimate, coefsagelesssex$conf.low, coefsagelesssex$conf.high )) %>% 
+  dplyr::filter(term=="Sexmale")
+```
+
+### Educational attainment
+```{r}
+agelesseducationlm <- lm(PAD ~ Education + Sex, data=mydata5)
+coefsagelessedu <-  tidy(agelesseducationlm , conf.int = TRUE)  #modify estimate and confidence intervals for graphical display
+coefsagelessedu <- coefsagelessedu %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelessedu$estimate, coefsagelessedu$conf.low, coefsagelessedu$conf.high )) %>% 
+    dplyr::filter(term=="EducationVocational or GCSE" | term== "EducationA-level or higher") 
+```
+
+### Socioeconomic status
+```{r}
+agelesssociolm <- lm(PAD ~ SocioStatus + Sex, data=mydata5)
+coefsagelesssocio <-  tidy(agelesssociolm , conf.int = TRUE)  #modify estimate and confidence intervals for graphical display
+coefsagelesssocio <- coefsagelesssocio %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelesssocio$estimate, coefsagelesssocio$conf.low, coefsagelesssocio$conf.high )) %>% 
+  dplyr::filter(term=="SocioStatusNon-manual")
+```
+
+### Childhood cognition (IQ)
+```{r}
+agelesschildcoglm <- lm(PAD ~ Childcog + Sex, data=mydata5)
+summ(agelesschildcoglm, robust="HC1", digits = 1,
+            confint=T)
+coefsagelesschildcog <-  tidy(agelesschildcoglm , conf.int = TRUE)  #modify estimate and confidence intervals for graphical display
+coefsagelesschildcog <- coefsagelesschildcog %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelesschildcog$estimate, coefsagelesschildcog$conf.low, coefsagelesschildcog$conf.high )) %>% 
+  dplyr::filter(term=="Childcog")
+```
+
+### Modify coeficients for graphical presentation
+```{r}
+coefsagelessel <- rbind(coefsagelesssex,  coefsagelesschildcog, coefsagelessedu, coefsagelesssocio)
+
+# Add nicer names
+coefsagelessel$names <- factor(c( "Male", "Childhood IQ (z score)", 
+                 "Vocational or GCSE", "A level or higher", "Non-manual social class"), 
+                 levels = c("Male", "Childhood IQ (z score)", 
+                 "Vocational or GCSE", "A level or higher", "Non-manual social class"))
+
+coefsagelessel$type = factor(c("Sex",
+               "Childhood cognition",
+               rep("Education level (reference: none attempted)", 2),
+               "Socioeconomic Status (reference: manual social class)"), 
+               levels = c("Sex", "Childhood cognition", "Education level (reference: none attempted)",
+               "Socioeconomic Status (reference: manual social class)"))
+
+```
+
+
+### Ageless contemporary correlates
+
+```{r}
+agelessimagingWBV <- lm(PAD ~ WBVz + TIVz + Sex, data=mydata5)
+
+coefsagelesswbv <-  tidy(agelessimagingWBV , conf.int = TRUE)  #modify estimate and confidence intervals for graphical display
+coefsagelesswbv <- coefsagelesswbv %>% 
+  dplyr::filter(term=="WBVz") 
+coefsagelesswbv <- coefsagelesswbv %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelesswbv$estimate, coefsagelesswbv$conf.low, coefsagelesswbv$conf.high ))
+
+```
+
+
+#### Hippocampi
+```{r}
+agelessimaginghippo <- lm(PAD ~ Hippovolz + Sex + TIVz, data=mydata5)
+coefsagelesshippo <-  tidy(agelessimaginghippo , conf.int = TRUE)   #modify estimate and confidence intervals for graphical display
+
+coefsagelesshippo <- coefsagelesshippo %>%
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelesshippo$estimate, coefsagelesshippo$conf.low, coefsagelesshippo$conf.high )) %>% 
+  dplyr::filter(term=="Hippovolz")
+```
+
+#### Imaging ventricles
+```{r}
+agelessimagingvent <- lm(PAD ~ Ventvolz + TIVz + Sex, data=mydata5)
+summ(imagingvent, robust="HC1", scale =T, digits = 4,
+            confint=T)
+coefsagelessvent <-  tidy(agelessimagingvent , conf.int = TRUE)   #modify estimate and confidence intervals for graphical display
+coefsagelessvent <- coefsagelessvent %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelessvent$estimate, coefsagelessvent$conf.low, coefsagelessvent$conf.high )) %>% 
+  dplyr::filter(term=="Ventvolz")
+```
+
+#### Imaging WMH
+```{r}
+agelessimagingwmh <- lm(PAD ~ WMHVolz + TIVz + Sex, data=mydata5)
+coefsagelessWMH <-  tidy(agelessimagingwmh, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsagelessWMH <- coefsagelessWMH %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelessWMH$estimate, coefsagelessWMH$conf.low, coefsagelessWMH$conf.high )) %>% 
+  dplyr::filter(term=="WMHVolz")
+```
+
+
+#### Combine results of brain imaging models for graphical display
+```{r}
+coefsagelessimaging <- rbind(coefsagelesswbv, coefsagelesshippo, coefsagelessvent, coefsagelessWMH)
+# Add nicer names
+coefsagelessimaging$names <- factor(c( "Whole brain (z score)", "Hippocampi (z score)", "Ventricles (z score)", "WMH (z score)"), levels = c("WMH (z score)", "Ventricles (z score)", "Hippocampi (z score)", "Whole brain (z score)"))
+# Group the variables 
+coefsagelessimaging$type = rep("MR Imaging volumes", 4)
+```
+
+
+```{r}
+agelessNFLlm <- lm(PAD ~ SerumNFLz + Sex + Age, data = mydata5)
+coefsagelessNFL <-  tidy(agelessNFLlm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsagelessNFL <- coefsagelessNFL %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelessNFL$estimate, coefsagelessNFL$conf.low, coefsagelessNFL$conf.high )) %>% 
+  dplyr::filter(term=="SerumNFLz")
+```
+
+```{r}
+agelesssuvrlm <- lm(PAD ~ AmyloidSuvrz + Sex, data = mydata5)
+coefsagelesssuvr <-  tidy(agelesssuvrlm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsagelesssuvr <- coefsagelesssuvr %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelesssuvr$estimate, coefsagelesssuvr$conf.low, coefsagelesssuvr$conf.high )) %>% 
+  dplyr::filter(term=="AmyloidSuvrz")
+```
+
+```{r}
+coefsagelessbiomarker <- rbind(coefsagelessNFL, coefsagelesssuvr)
+coefsagelessbiomarker
+
+# Add nicer names and variable types
+coefsagelessbiomarker$names <- c( "Serum NFL (z score)", "Florbetapir SUVR (z score)")
+coefsagelessbiomarker$type = rep("Blood and Imaging Biomarkers", 2)
+
+```
+
+#### Cognition
+```{r}
+agelesscoglm <- lm(PAD ~ PACC + Sex + Education + Childcog + SocioStatus, data = mydata5)
+coefsagelesscog <-  tidy(agelesscoglm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsagelesscog <- coefsagelesscog %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelesscog$estimate, coefsagelesscog$conf.low, coefsagelesscog$conf.high )) %>% 
+  dplyr::filter(term =="PACC")
+coefsagelesscog$names <- c( "PACC (z score)")
+coefsagelesscog$type = rep("Cognition", 1)
+```
+
+
+```{r}
+agelessdisorderlm <- lm(PAD ~ MajorBrainDisorder + Sex, data = mydata5)
+coefsagelessdisorder <-  tidy(agelessdisorderlm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsagelessdisorder <- coefsagelessdisorder %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelessdisorder$estimate, coefsagelessdisorder$conf.low, coefsagelessdisorder$conf.high )) %>% 
+  dplyr::filter(term =="MajorBrainDisorderPresent")
+coefsagelessdisorder$names <- c( "Major Brain Disorder")
+coefsagelessdisorder$type = rep("Comorbidities", 1)
+```
+
+#### Physical attributes regression
+
+```{r}
+agelessFEV1lm <- lm(PAD ~ FEV1z + Smoking + Heightz + Sex, data = mydata5)
+coefsagelessFEV1 <-  tidy(agelessFEV1lm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsagelessFEV1 <- coefsagelessFEV1 %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelessFEV1$estimate, coefsagelessFEV1$conf.low, coefsagelessFEV1$conf.high )) %>%
+  dplyr::filter(term == "FEV1z")
+```
+
+
+```{r}
+agelessgriplm <- lm(PAD ~ GripStrengthz + Sex, data = mydata5)
+coefsagelessgrip <-  tidy(agelessgriplm, conf.int = TRUE)   #modify estimate and confidence intervals for graphical display
+coefsagelessgrip <- coefsagelessgrip %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelessgrip$estimate, coefsagelessgrip$conf.low, coefsagelessgrip$conf.high )) %>%
+  dplyr::filter(term == "GripStrengthz")
+```
+
+
+```{r}
+agelesswalklm <- lm(PAD ~ WalkSpeedz  + Heightz + Sex, data = mydata5)
+
+coefsagelesswalk <-  tidy(agelesswalklm, conf.int = TRUE)    #modify estimate and confidence intervals for graphical display
+coefsagelesswalk <- coefsagelesswalk %>% 
+  mutate(display_ests = sprintf("%.1f [%.1f, %.1f]" , coefsagelesswalk$estimate, coefsagelesswalk$conf.low, coefsagelesswalk$conf.high )) %>%
+  dplyr::filter(term == "WalkSpeedz")
+```
+\
+
+```{r}
+coefsagelessphysical <- rbind(coefsagelessFEV1, coefsagelessgrip, coefsagelesswalk)
+
+# Add nicer names and variable types
+coefsagelessphysical$names <- c("FEV1 (z score)", "Grip strength (z score)",  "Walking speed (z score)")
+coefsagelessphysical$type = rep("Physical metrics", 3)
+
+
+```
+
+
+#### Combined forest plots 
+
+
+
+
+```{r}
+fullagelesscoefsassoc <- rbind(coefsagelessbiomarker, coefsagelesscog, coefsagelessdisorder, coefsagelessphysical, coefsagelessel, coefsagelessimaging)
+```
+
+```{r}
+fullagelesscoefsassoc$type <- factor(fullagelesscoefsassoc$type, levels=c("Sex", "Childhood cognition", "Education level (reference: none attempted)", "Socioeconomic Status (reference: manual social class)", "Cardiovascular Risk", "Genetics", "Blood and Imaging Biomarkers", "Cognition", "Comorbidities", "Physical metrics", "MR Imaging volumes"))
+```
+
+
+```{r}
+fullagelesscoefsassoc$names <- fct_relevel(fullagelesscoefsassoc$names, "A level or higher", "Florbetapir SUVR (z score)", "WMH (z score)", "Hippocampi (z score)", "Ventricles (z score)", "Walking speed (z score)", "Grip strength (z score)") 
+```
+
+```{r, fig.width = 8, fig.height = 9}
+
+(fullagelessassocgraph <- ggplot(fullagelesscoefsassoc, aes(estimate, names )) + 
+  geom_point(aes(), size=0.9)+ 
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0, size = 0.4)+
+  geom_text(aes(x = Inf, label = display_ests), vjust = 0.5, colour = "black", hjust = -0.1, size = 3.5) +
+  coord_cartesian(clip = "off") +
+  geom_vline(xintercept = 0, linetype = 2)+
+  theme_bw(base_size = 12)+
+  theme(plot.margin = unit(c(1,4,0.5,0.5), "cm")) +
+   theme(panel.border = element_rect(fill = NA, colour="black", size = 0.33)) +
+  labs(x =  NULL,y = NULL, title = NULL)+
+   facet_col(~type, scale = "free_y", space = "free") +
+   theme(strip.background = element_rect(fill="grey85", colour="black")))  
+```
+
+
+
+# 11 Version control
+
+```{r}
+print(version)
+```
+
+```{r}
+print(sessionInfo())
+
+```
+
+
